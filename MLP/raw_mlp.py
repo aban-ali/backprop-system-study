@@ -1,7 +1,7 @@
 # This file contains the raw implementation of 
 # multi layer percetron, i.e. without using pytorch and autograd.
 # The architecture of MLP remain same as - 
-# Inputs->Linear->ReLU->Linear->ReLU->Linear->Softmax
+# Inputs->Linear->ReLU->Linear->ReLU->Linear
 
 import numpy as np
 import random
@@ -63,4 +63,5 @@ class NeuralNet():
         return x
 
     def SGD(self):
-        pass
+        """"""
+        
