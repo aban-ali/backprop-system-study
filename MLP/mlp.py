@@ -11,9 +11,6 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
 
-from tqdm import tqdm
-
-data = None
 
 class MLP(nn.Module):
     def __init__(self):
@@ -43,7 +40,7 @@ def load_data(train=True):
     and load testing data with batch size 1 (helps in calculating 
     total loss and per label accuracy)
     """
-    batch_size = 20 if train else 1
+    batch_size = 32 if train else 1
 
     dataset = datasets.MNIST(root="./dataset", train=train, 
                         download=False, transform=transforms.ToTensor())
@@ -58,7 +55,7 @@ def start_training(net, criterion, optimizer, data, device, epochs=3):
         print(f"Epoch {epoch+1} started....")
         running_loss = 0
 
-        for i, (images, labels) in tqdm(enumerate(data)):
+        for i, (images, labels) in enumerate(data):
             images = images.view(images.shape[0], -1).to(device)
 
             optimizer.zero_grad()
@@ -88,7 +85,7 @@ def validate_model(model, data, criterion, device):
             count[label.item()] = count.get(label.item(), 0) + 1
 
             pred = model(image)
-            total_loss += criterion(pred, label)
+            total_loss += criterion(pred, label).item()
             pred_val = torch.argmax(pred).item()
 
             if pred_val == label.item():
