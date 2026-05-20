@@ -8,16 +8,19 @@ import random
 
 class CrossEntropyCost():
     @staticmethod
-    def func(a, y):
-        pass
+    def func(z, y):
+        max_val = np.max(z)
+        log_softmax = max_val + np.log(np.sum(np.exp(z - max_val)))
+        return log_softmax - z[y]
 
     @staticmethod
-    def func_delta():
-        pass
+    def func_delta(z, y):
+        shifted_z = z - np.max(z)
+        probs = np.exp(shifted_z) / np.sum(np.exp(shifted_z))
+        probs[y] -= 1
+        return probs
 
-
-class HelperFunc():
-
+class Activation():
     @staticmethod
     def relu(z):
         """ReLU Value."""
@@ -27,7 +30,6 @@ class HelperFunc():
     def relu_prime(z):
         """Derivative of ReLU."""
         return (z > 0).astype(float)
-
 
 class NeuralNet():
 
@@ -48,7 +50,7 @@ class NeuralNet():
         
         """
         self.biases = [ np.random.randn(size, 1) for size in self.sizes[1:] ]
-        self.weights = [ np.random.randn(y, x) 
+        self.weights = [ np.random.randn(y, x) * np.sqrt(2/x)
                                 for x, y in zip(self.sizes[:-1], self.sizes[1:]) ]
         
     def feedforward(self, x):
@@ -57,12 +59,13 @@ class NeuralNet():
         
         """
         for w,b in zip(self.weights[:-1], self.biases[:-1]):
-            x = HelperFunc.relu( np.dot(w, x) + b )
+            x = Activation.relu( np.dot(w, x) + b )
         x = np.dot(self.weights[-1], x) + self.biases[-1]
         return x
 
     def SGD(self, data, epochs=3, batch_size=20, lr=0.005):
-        """"""
+        """Calculates the gradients and updates the weights and
+        biases of neural network. """
         for epoch in range(epochs):
             print(f"Epoch {epoch} started....")
             images, labels = data
@@ -79,16 +82,45 @@ class NeuralNet():
         images, labels = mini_batch
         grad_w = [np.zeros(w.shape) for w in self.weights]
         grad_b = [np.zeros(b.shape) for b in self.biases]
+
         for x, y in zip(images, labels):
             delta_w, delta_b = self.backprop(x, y)
-            grad_w += delta_w
-            grad_b += delta_b
-        self.weights -= ( lr / len(mini_batch) ) * grad_w
-        self.biases -= ( lr / len(mini_batch) ) * grad_b
+            grad_w = [ gw + dw for gw, dw in zip(grad_w, delta_w) ]
+            grad_b = [ gb + db for gb, db in zip(grad_b, delta_b) ]
+
+        self.weights = [ w - ( lr / len(images) ) * gw
+                        for w, gw in zip(self.weights, grad_w) ]
+        self.biases = [ b - ( lr / len(images) ) * gb
+                        for b, gb in zip(self.biases, grad_b) ]
         
     def backprop(self, x, y):
         delta_w = [ np.zeros(w.shape) for w in self.weights ]
         delta_b = [ np.zeros(b.shape) for b in self.biases ]
+        
+        activation = x.reshape(-1, 1)
+        activations = [activation]
+        zs = []
+        for w,b in zip(self.weights[:-1], self.biases[:-1]):
+            z = np.dot(w, activation) + b
+            zs.append(z)
+            activation = Activation.relu(z)
+            activations.append(activation)
+        z = np.dot(self.weights[-1], activation) + self.biases[-1]
+        zs.append(z)
+        activations.append(z)
+
+        
+        delta = CrossEntropyCost.func_delta(activations[-1], y)
+        delta_b[-1] = delta
+        delta_w[-1] = np.dot(delta, activations[-2].T)
+
+        for l in range(2, self.layers):
+            z = zs[-l]
+            rp = Activation.relu_prime(z)
+            delta = np.dot(self.weights[-l+1].T, delta) * rp
+            delta_b[-l] = delta
+            delta_w[-l] = np.dot(delta, activations[-l-1].T)
+        return (delta_w, delta_b)
 
 
 
