@@ -124,8 +124,28 @@ class NeuralNet():
 
 
 
-    def validate_model(self):
-        pass
+    def validate_model(self, test_data):
+        images, labels = test_data
+        count = {}
+        correct_preds = {}
+        total_loss = 0
+
+        for x, y in zip(images, labels):
+            x = x.reshape(-1, 1)
+            count[y] = count.get(y, 0) + 1
+
+            x = self.feedforward(x)
+            label = np.argmax(x)
+            if label == y:
+                correct_preds[y] = correct_preds.get(y, 0) + 1
+            
+            total_loss += CrossEntropyCost.func(x)
+        
+        print(f"Total Average Loss = {total_loss/len(images)}")
+        for i in range(10):
+            pred = correct_preds[i]
+            c = count[i]
+            print(f"Label:{i}\t Correct/Total predictions: {pred}/{c}\t Accuracy:{(pred*100.0/c):.2f}%")
 
 
 
