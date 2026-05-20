@@ -9,12 +9,21 @@ import random
 class CrossEntropyCost():
     @staticmethod
     def func(z, y):
+        """Calculates Cross Entropy Loss. 
+        Implemented using fused kernel of Cross Entropy and Softmax.
+        It uses logits from the models calculation.
+        
+        """
         max_val = np.max(z)
         log_softmax = max_val + np.log(np.sum(np.exp(z - max_val)))
-        return log_softmax - z[y]
+        return log_softmax - z[y, 0]
 
     @staticmethod
     def func_delta(z, y):
+        """Calculates the derivative of the fused kernel 
+        of Cross Entropy and Softmax.
+        
+        """
         shifted_z = z - np.max(z)
         probs = np.exp(shifted_z) / np.sum(np.exp(shifted_z))
         probs[y] -= 1
@@ -63,9 +72,11 @@ class NeuralNet():
         x = np.dot(self.weights[-1], x) + self.biases[-1]
         return x
 
-    def SGD(self, data, epochs=3, batch_size=20, lr=0.005):
+    def SGD(self, data, epochs=3, batch_size=32, lr=0.005):
         """Calculates the gradients and updates the weights and
-        biases of neural network. """
+        biases of neural network. 
+        
+        """
         for epoch in range(epochs):
             print(f"Epoch {epoch} started....")
             images, labels = data
@@ -79,6 +90,10 @@ class NeuralNet():
                 self.update_mini_batch(mini_batch, lr)
 
     def update_mini_batch(self, mini_batch, lr=0.005):
+        """Updates the weights and biases of the model
+        for every batch. It implement simple SGD model.
+        
+        """
         images, labels = mini_batch
         grad_w = [np.zeros(w.shape) for w in self.weights]
         grad_b = [np.zeros(b.shape) for b in self.biases]
@@ -94,6 +109,10 @@ class NeuralNet():
                         for b, gb in zip(self.biases, grad_b) ]
         
     def backprop(self, x, y):
+        """Implements the backpropogation for the model.
+        Computes the gradient of a single vaule as of now.
+        
+        """
         delta_w = [ np.zeros(w.shape) for w in self.weights ]
         delta_b = [ np.zeros(b.shape) for b in self.biases ]
         
@@ -125,6 +144,11 @@ class NeuralNet():
 
 
     def validate_model(self, test_data):
+        """Model's correctness can be validated from here after training is done.
+        It will print out the total average loss occured for test data and 
+        the accuracy of model for each label.
+        
+        """
         images, labels = test_data
         count = {}
         correct_preds = {}
@@ -139,21 +163,22 @@ class NeuralNet():
             if label == y:
                 correct_preds[y] = correct_preds.get(y, 0) + 1
             
-            total_loss += CrossEntropyCost.func(x)
+            total_loss += CrossEntropyCost.func(x, y)
         
         print(f"Total Average Loss = {total_loss/len(images)}")
         for i in range(10):
-            pred = correct_preds[i]
+            pred = correct_preds.get(i, 0)
             c = count[i]
             print(f"Label:{i}\t Correct/Total predictions: {pred}/{c}\t Accuracy:{(pred*100.0/c):.2f}%")
 
 
 
-
-
-
 def load_data(train=True):
-    """Extract the """
+    """Extract the data from the binary files downloaded through
+    torchvision's datasets module. This also separates image data from
+    respective labels and train data from test data.
+    
+    """
     filename = "train-images-idx3-ubyte" if train else "t10k-images-idx3-ubyte"
     label_file = "train-labels-idx1-ubyte" if train else "t10k-labels-idx1-ubyte"
     n = int(6e4) if train else int(1e4)
@@ -173,16 +198,22 @@ def load_data(train=True):
             image.append(ord(f.read(1)))
         images.append(image)
 
-    return (np.array(images), np.array(labels))
+    return (
+        np.array(images, dtype=np.float32) / 255.0, 
+        np.array(labels)
+    )
 
 
 
 def main():
     nn_size = [784, 256, 128, 10]
     net = NeuralNet(sizes=nn_size)
-    pass
+    data = load_data()
+    net.SGD(data)
 
-
+    test_data = load_data(train=False)
+    net.validate_model(test_data)
+    
 
 if __name__ == "__main__":
     main()
