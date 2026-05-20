@@ -91,7 +91,7 @@ def validate_model(model, data, criterion, device):
             if pred_val == label.item():
                 correct_preds[label.item()] = correct_preds.get(label.item(), 0) + 1
 
-    print(f"Total Loss = {total_loss}")
+    print(f"Total Average Loss = {total_loss/len(data[0])}")
     for i in range(10):
         pred = correct_preds[i]
         c = count[i]
