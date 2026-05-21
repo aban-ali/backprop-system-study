@@ -80,7 +80,7 @@ def validate_model(model, data, criterion, device):
 
     with torch.no_grad():
         for image, label in data:
-            image = image.view(-1).to(device)
+            image = image.view(1, -1).to(device)
             label = label.to(device)
             count[label.item()] = count.get(label.item(), 0) + 1
 
@@ -91,9 +91,9 @@ def validate_model(model, data, criterion, device):
             if pred_val == label.item():
                 correct_preds[label.item()] = correct_preds.get(label.item(), 0) + 1
 
-    print(f"Total Average Loss = {total_loss/len(data[0])}")
+    print(f"Total Average Loss = {total_loss/len(data.dataset)}")
     for i in range(10):
-        pred = correct_preds[i]
+        pred = correct_preds.get(i, 0)
         c = count[i]
         print(f"Label:{i}\t Correct/Total predictions: {pred}/{c}\t Accuracy:{(pred*100.0/c):.2f}%")
             
