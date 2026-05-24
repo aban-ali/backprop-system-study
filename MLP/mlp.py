@@ -36,7 +36,7 @@ def model_init(device):
     return net, criterion, optimizer
 
 def load_data(train=True):
-    """Load the training data with batch size 20,
+    """Load the training data with batch size 32,
     and load testing data with batch size 1 (helps in calculating 
     total loss and per label accuracy)
     """

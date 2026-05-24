@@ -1,5 +1,4 @@
 # helper files
-dataset.py
 dataset/*
 
 # Byte-compiled / optimized / DLL files
