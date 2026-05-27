@@ -45,7 +45,7 @@ def load_data(train=True):
 
 
 def main():
-    nn_size = np.array([784, 256, 128, 10])
+    nn_size = np.array([784, 256, 128, 10], dtype=np.int32)
     net = NeuralNet(sizes=nn_size)
     data = load_data()
     net.SGD(data)
