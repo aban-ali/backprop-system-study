@@ -49,7 +49,7 @@ def load_data(train=True):
     return data
 
 def start_training(net, criterion, optimizer, data, device, epochs=3):
-    """This function trains the Neural Net with simple hyperparamets."""
+    """This function trains the Neural Net with simple hyperparameters."""
     for epoch in range(epochs):
 
         print(f"Epoch {epoch+1} started....")
