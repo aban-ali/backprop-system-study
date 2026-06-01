@@ -5,56 +5,10 @@
 #include <pybind11/numpy.h>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
+#include "kernel.cu"
 
 namespace py = pybind11;
-
-__global__
-void init_weights(float* weights, size_t weights_size){
-    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < weights_size){
-        int temp = i % 7;
-        weights[i] = (float)temp / (7.0 * sqrtf(weights_size));
-    }
-}
-
-__global__
-void init_biases(float* biases, size_t biases_size){
-    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < biases_size){
-        int temp = i % 7;
-        biases[i] = (float)temp / 7.0;
-    }
-}
-
-// Implements Dot Product of Matrix with a vector.
-// It also provides implementaion of ReLU activation, if specified.
-// Not suited for batching. Batching will be considered later.
-__global__
-void dot_prod(
-    float* mat, size_t rows, float* bias,
-    float* vec, size_t cols, float* out, bool relu
-    ){
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    extern __shared__ float temp_vec[];
-
-    for(int k=i; k<cols && i<rows; k+=rows)
-        temp_vec[k] = vec[k];
-    __syncthreads();
-
-    float val = 0.0f;
-    for(int idx=0; idx<cols && i<rows; idx++)
-        val += temp_vec[idx] * mat[i*cols + idx];
-
-    if(i<rows){
-        float res = val + bias[i];
-        if(relu)
-            out[i] = res > 0? res : 0;
-        else
-            out[i] = res;
-    }
-            return;
-}
-
 
 
 class NeuralNet{
@@ -62,7 +16,85 @@ private:
     float* weights = nullptr;       // contains the weights of the Neural Net
     float* biases = nullptr;        // contains the biases of the Neurons
     int*   layer_sizes = nullptr;   // contains the architecture of the Neural Net
+    float*  grads_w = nullptr;
+    float*  grads_b = nullptr;
+    float*  zs = nullptr;
+    float*  activations = nullptr;
+    float*  ans = nullptr;
     int    num_layers;              // stores the number of entries in architecture array 
+
+
+    // Implements the forward pass for backpropogation,
+    // specifically stores all the z and activation values.
+    void forward(float* x, int cols){
+        float* vec;
+        float* out;
+        size_t max_len = 0;
+        size_t offset_w = 0;
+        size_t offset_b = 0;
+
+        for(int i=0; i<num_layers; i++)
+            max_len = std::max((int)max_len, layer_sizes[i]);
+
+        cudaMalloc((void**)&vec, max_len * sizeof(float));
+        cudaMalloc((void**)&out, max_len * sizeof(float));
+        cudaMemcpy(vec, x, cols * sizeof(float), cudaMemcpyHostToDevice);
+
+        for(int i=0; i<num_layers-1; i++){
+            backprop_dotprod<<<(layer_sizes[i+1] + 63)/64, 64, layer_sizes[i]*sizeof(float)>>>(
+                &weights[offset_w], layer_sizes[i+1],
+                &biases[offset_b], vec, layer_sizes[i],
+                &zs[offset_b], &activations[offset_b], out
+            );
+
+            offset_w += layer_sizes[i] * layer_sizes[i+1];
+            offset_b += layer_sizes[i+1];
+            cudaDeviceSynchronize();
+
+            std::swap(vec, out);
+        }
+
+        offset_b -= layer_sizes[num_layers-1];
+        softmax<<<1, 1>>>(&zs[offset_b], layer_sizes[num_layers-1], &activations[offset_b]);
+
+        float* temp = (float*)malloc(10*sizeof(float));
+        cudaMemcpy(temp, &activations[offset_b], 10*sizeof(float), cudaMemcpyDeviceToHost);
+        float s=0;
+        for(int i=0; i<10; i++){
+            s+=temp[i];
+        }
+        std::cout << "Total Sum of activations: \t" << s << "\n";
+
+        cudaFree(vec);
+        cudaFree(out);
+        return;
+    }
+
+    void backwards(float* x, int cols, size_t weights_size, size_t biases_size){
+        biases_size -= layer_sizes[num_layers-1];
+        // last layer has only 10 neurons, so 1 block of 64 threads suffices in this case.
+        last_layer_backward<<<1, 64>>>(
+            &grads_b[biases_size], &activations[biases_size],
+            x[cols-1], layer_sizes[num_layers-1]
+        );
+
+        for(int i=num_layers-1; i>1; i--){
+            weights_size -= layer_sizes[i] * layer_sizes[i-1];
+            biases_size -= layer_sizes[i-1];
+
+            cudaDeviceSynchronize();
+            update_grads<<<(layer_sizes[i-1] + 63) / 64, 64>>>(
+                &weights[weights_size], &grads_w[weights_size], 
+                &grads_b[biases_size], layer_sizes[i-1], layer_sizes[i],
+                &activations[biases_size], &zs[biases_size]
+            );
+        }
+        cudaDeviceSynchronize();
+        update_weights<<<(layer_sizes[0] + 63) / 64 ,64>>>(grads_w, grads_b, x, layer_sizes[0], layer_sizes[1]);
+        cudaDeviceSynchronize();
+    }
+
+
 
 public:
     // Avoids creation of same class or something,
@@ -90,8 +122,12 @@ public:
             weights_size += h_ptr[i] * h_ptr[i-1];
             biases_size += h_ptr[i];
         }
+
+        ans = (float*)malloc(h_ptr[num_layers-1]*sizeof(float));
         err_w = cudaMalloc((void**)&weights, weights_size * sizeof(float));
         err_b = cudaMalloc((void**)&biases, biases_size * sizeof(float));
+
+        backprop_vars_init(weights_size, biases_size);      // allocate memory for gradients and all to avoid memory allocation overhead later.
 
         if(err_w != cudaSuccess)
             std::cout << cudaGetErrorString(err_w);
@@ -105,8 +141,39 @@ public:
         init_biases<<<(biases_size + 127) / 128, 128>>>(biases, biases_size);
     }
 
-    // calculates the 
-    int feedforward(py::array_t<float> arr){
+    // allocate memory in GPU for gradients, activation and z values
+    // This avoids malloc overhead in later part of program
+    void backprop_vars_init(size_t weights_size, size_t biases_size){
+        cudaError_t e1, e2, e3, e4;
+
+        e1 = cudaMalloc((void**)&grads_w, weights_size * sizeof(float));
+        if(e1 != cudaSuccess)
+            std::cout << cudaGetErrorString(e1);
+        else
+            std::cout<<"Space for grads_w allocated.\n";
+
+        e2 = cudaMalloc((void**)&grads_b, biases_size * sizeof(float));
+        if(e2 != cudaSuccess)
+            std::cout << cudaGetErrorString(e2);
+        else
+            std::cout<<"Space for grads_b allocated.\n";
+
+        e3 = cudaMalloc((void**)&zs, biases_size * sizeof(float));
+        if(e3 != cudaSuccess)
+            std::cout<<cudaGetErrorString(e3);
+        else
+            std::cout<<"Space for zs allocated.\n";
+
+        e4 = cudaMalloc((void**)&activations, biases_size * sizeof(float));
+        if(e4 != cudaSuccess)
+            std::cout << cudaGetErrorString(e4);
+        else
+            std::cout<<"Space for activations allocated.\n";
+    }
+
+    // calculates the target value of input variable x
+    // i.e. implemented forward pass for the network
+    py::array_t<float> feedforward(py::array_t<float> arr){
         py::buffer_info buf = arr.request();
         float*  x = static_cast<float*>(buf.ptr);
         size_t  len = buf.size;
@@ -116,7 +183,6 @@ public:
         int     max_net = 0;
         float*  out1;
         float*  out2;
-        float*  ans = new float[ layer_sizes[ num_layers - 1 ] ];
 
         for(int idx=0; idx<num_layers; idx++)
             max_net = std::max(max_net, layer_sizes[idx]);
@@ -131,7 +197,6 @@ public:
                 &weights[offset_w], layer_sizes[i+1], &biases[offset_b],
                 out1, layer_sizes[i], out2, true
             );
-            // cudaDeviceSynchronize();
             offset_w += layer_sizes[i] * layer_sizes[i+1];
             offset_b += layer_sizes[i+1];
             
@@ -146,12 +211,42 @@ public:
         cudaFree(out1);
         cudaFree(out2);
 
-        int best=0;
-        for(int idx=0; idx<layer_sizes[num_layers-1]; idx++)
-            best = ans[idx] > ans[best] ? idx : best;
+        return py::array_t<float>(layer_sizes[ num_layers - 1 ], ans);
+    }
 
-        delete[] ans;
-        return best;
+    void update_miniBatch(
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr,
+        float lr
+    ){
+        py::buffer_info buf = arr.request();
+        float* data = static_cast<float*>(buf.ptr);
+        int rows = buf.shape[0];
+        int cols = buf.shape[1];
+
+        size_t  weights_size = 0;
+        size_t  biases_size = 0;
+
+        for(int i=1; i<num_layers; i++){
+            weights_size += layer_sizes[i] * layer_sizes[i-1];
+            biases_size += layer_sizes[i];
+        }
+
+        init_grads<<<(weights_size + 63) / 64, 64>>>(grads_w, weights_size);
+        init_grads<<<(biases_size + 63) / 64, 64>>>(grads_b, biases_size);
+
+        for(int batch=0; batch<rows; batch++){
+            
+            forward(&data[batch * cols], cols-1);
+            backwards(&data[batch * cols], cols, weights_size, biases_size);
+            
+        }
+
+        update_parameters<<<(weights_size + 63) / 64, 64>>>(
+            weights, grads_w, weights_size, rows, lr
+        );
+        update_parameters<<<(biases_size + 63) / 64, 64>>>(
+            biases, grads_b, biases_size, rows, lr
+        );
     }
 
     // Deconstructor to avoid memory leaks after 
@@ -163,6 +258,13 @@ public:
             cudaFree(biases);
         if(layer_sizes)
             cudaFreeHost(layer_sizes);
+        if(ans)
+            free(ans);
+
+        cudaFree(grads_w);
+        cudaFree(grads_b);
+        cudaFree(activations);
+        cudaFree(zs);
     }
 };
 
@@ -170,11 +272,10 @@ public:
 PYBIND11_MODULE(cuda_mlp, m){
     py::class_<NeuralNet>(m, "NeuralNet")
         .def(py::init<py::array_t<int>>())
-        .def("feedforward", &NeuralNet::feedforward);
+        .def("feedforward", &NeuralNet::feedforward)
+        .def("update_miniBatch", &NeuralNet::update_miniBatch);
 }
 
 
 // command to compile the file:
-// g++ -O3 -Wall -shared -std=c++11 -fPIC $(python3 -m pybind11 --includes) example.cpp -o example$(python3-config --extension-suffix)
-// g++ -O3 -Wall -shared -std=c++11 -fPIC $(python3 -m pybind11 --includes) example.cpp -o example.so
 // nvcc -O3 -shared -Xcompiler -fPIC $(python3 -m pybind11 --includes) cuda_mlp.cu -o cuda_extension.so
