@@ -16,11 +16,11 @@ private:
     float* weights = nullptr;       // contains the weights of the Neural Net
     float* biases = nullptr;        // contains the biases of the Neurons
     int*   layer_sizes = nullptr;   // contains the architecture of the Neural Net
-    float*  grads_w = nullptr;
-    float*  grads_b = nullptr;
-    float*  zs = nullptr;
-    float*  activations = nullptr;
-    float*  ans = nullptr;
+    float*  grads_w = nullptr;      // used to store gradients of weights
+    float*  grads_b = nullptr;      // used to store gradients of biases
+    float*  zs = nullptr;           // stores the z values, helps in backprop
+    float*  activations = nullptr;  // stores the activation values, helps in backprop
+    float*  ans = nullptr;          // stores the logits from forward pass. Used to return array back to python 
     int    num_layers;              // stores the number of entries in architecture array 
 
 
@@ -28,52 +28,42 @@ private:
     // specifically stores all the z and activation values.
     void forward(float* x, int cols){
         float* vec;
-        float* out;
-        size_t max_len = 0;
+        float* init_vec;
         size_t offset_w = 0;
         size_t offset_b = 0;
 
-        for(int i=0; i<num_layers; i++)
-            max_len = std::max((int)max_len, layer_sizes[i]);
-
-        cudaMalloc((void**)&vec, max_len * sizeof(float));
-        cudaMalloc((void**)&out, max_len * sizeof(float));
-        cudaMemcpy(vec, x, cols * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMalloc((void**)&init_vec, cols * sizeof(float));
+        cudaMemcpy(init_vec, x, cols * sizeof(float), cudaMemcpyHostToDevice);
 
         for(int i=0; i<num_layers-1; i++){
-            backprop_dotprod<<<(layer_sizes[i+1] + 63)/64, 64, layer_sizes[i]*sizeof(float)>>>(
+            vec = i>0? &activations[offset_b - layer_sizes[i]] : init_vec;
+
+            backprop_dotprod<<<(layer_sizes[i+1] + 127)/128, 128, layer_sizes[i]*sizeof(float)>>>(
                 &weights[offset_w], layer_sizes[i+1],
                 &biases[offset_b], vec, layer_sizes[i],
-                &zs[offset_b], &activations[offset_b], out
+                &zs[offset_b], &activations[offset_b]
             );
 
             offset_w += layer_sizes[i] * layer_sizes[i+1];
             offset_b += layer_sizes[i+1];
             cudaDeviceSynchronize();
-
-            std::swap(vec, out);
         }
 
         offset_b -= layer_sizes[num_layers-1];
+
         softmax<<<1, 1>>>(&zs[offset_b], layer_sizes[num_layers-1], &activations[offset_b]);
 
-        float* temp = (float*)malloc(10*sizeof(float));
-        cudaMemcpy(temp, &activations[offset_b], 10*sizeof(float), cudaMemcpyDeviceToHost);
-        float s=0;
-        for(int i=0; i<10; i++){
-            s+=temp[i];
-        }
-        std::cout << "Total Sum of activations: \t" << s << "\n";
-
-        cudaFree(vec);
-        cudaFree(out);
+        cudaFree(init_vec);
+        cudaDeviceSynchronize();
         return;
     }
 
     void backwards(float* x, int cols, size_t weights_size, size_t biases_size){
+        float* d_x;
         biases_size -= layer_sizes[num_layers-1];
-        // last layer has only 10 neurons, so 1 block of 64 threads suffices in this case.
-        last_layer_backward<<<1, 64>>>(
+
+        // last layer has only 10 neurons, so 1 block of 32 threads or a warp suffices in this case.
+        last_layer_backward<<<1, 32>>>(
             &grads_b[biases_size], &activations[biases_size],
             x[cols-1], layer_sizes[num_layers-1]
         );
@@ -89,12 +79,16 @@ private:
                 &activations[biases_size], &zs[biases_size]
             );
         }
+
+        cudaMalloc((void**)&d_x, (cols-1)*sizeof(float));
+        cudaMemcpy(d_x, x, (cols-1)*sizeof(float), cudaMemcpyHostToDevice);
+
         cudaDeviceSynchronize();
-        update_weights<<<(layer_sizes[0] + 63) / 64 ,64>>>(grads_w, grads_b, x, layer_sizes[0], layer_sizes[1]);
+        update_weights<<<(layer_sizes[0] + 63) / 64 ,64>>>(grads_w, grads_b, d_x, layer_sizes[0], layer_sizes[1]);
         cudaDeviceSynchronize();
+
+        cudaFree(d_x);
     }
-
-
 
 public:
     // Avoids creation of same class or something,
@@ -123,11 +117,11 @@ public:
             biases_size += h_ptr[i];
         }
 
+        backprop_vars_init(weights_size, biases_size);      // allocate memory for gradients and all to avoid memory allocation overhead later.
+
         ans = (float*)malloc(h_ptr[num_layers-1]*sizeof(float));
         err_w = cudaMalloc((void**)&weights, weights_size * sizeof(float));
         err_b = cudaMalloc((void**)&biases, biases_size * sizeof(float));
-
-        backprop_vars_init(weights_size, biases_size);      // allocate memory for gradients and all to avoid memory allocation overhead later.
 
         if(err_w != cudaSuccess)
             std::cout << cudaGetErrorString(err_w);
@@ -139,6 +133,8 @@ public:
 
         init_weights<<<(weights_size + 127) / 128, 128>>>(weights, weights_size);
         init_biases<<<(biases_size + 127) / 128, 128>>>(biases, biases_size);
+
+        std:: cout << "All weights initialization done...👍🏻\n";
     }
 
     // allocate memory in GPU for gradients, activation and z values
@@ -149,26 +145,18 @@ public:
         e1 = cudaMalloc((void**)&grads_w, weights_size * sizeof(float));
         if(e1 != cudaSuccess)
             std::cout << cudaGetErrorString(e1);
-        else
-            std::cout<<"Space for grads_w allocated.\n";
 
         e2 = cudaMalloc((void**)&grads_b, biases_size * sizeof(float));
         if(e2 != cudaSuccess)
             std::cout << cudaGetErrorString(e2);
-        else
-            std::cout<<"Space for grads_b allocated.\n";
 
         e3 = cudaMalloc((void**)&zs, biases_size * sizeof(float));
         if(e3 != cudaSuccess)
             std::cout<<cudaGetErrorString(e3);
-        else
-            std::cout<<"Space for zs allocated.\n";
 
         e4 = cudaMalloc((void**)&activations, biases_size * sizeof(float));
         if(e4 != cudaSuccess)
             std::cout << cudaGetErrorString(e4);
-        else
-            std::cout<<"Space for activations allocated.\n";
     }
 
     // calculates the target value of input variable x

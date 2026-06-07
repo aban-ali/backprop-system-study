@@ -15,7 +15,7 @@ __global__
 void init_biases(float* biases, size_t biases_size){
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < biases_size){
-        float r = ((float)((i * 17 + 13) % 1000) / 500.0f) - 1.0f;
+        float r = ((float)((i * 13 + 17) % 1000) / 500.0f) - 1.0f;
         biases[i] = r * sqrtf(2.0f/biases_size);
     }
 }
@@ -35,7 +35,7 @@ void init_grads(float* grads, size_t grad_size){
 __global__
 void dot_prod(
     float* mat, size_t rows, float* bias,
-    float* vec, size_t cols, float* out, bool relu
+    float* vec, size_t cols, float* out, bool isrelu
     ){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     extern __shared__ float temp_vec[];
@@ -50,7 +50,7 @@ void dot_prod(
 
     if(i<rows){
         float res = val + bias[i];
-        if(relu)
+        if(isrelu)
             out[i] = res > 0? res : 0;
         else
             out[i] = res;
@@ -63,7 +63,7 @@ void dot_prod(
 __global__
 void backprop_dotprod(
     float* mat, size_t rows, float* bias, float* vec, 
-    size_t cols, float* zs, float* activations, float* out
+    size_t cols, float* zs, float* activations
     ){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     extern __shared__ float temp_vec[];
@@ -79,7 +79,6 @@ void backprop_dotprod(
     if(i<rows){
         zs[i] = val + bias[i];
         activations[i] = zs[i] > 0? zs[i] : 0;
-        out[i] = activations[i];
     }
     return;
 }
@@ -100,7 +99,7 @@ __global__
 void last_layer_backward(float* grads_b, float* a, int y, int len){
     int i = threadIdx.x;
     if(i < len)
-        grads_b[i] = i==y ? a[i] - 1.0f : a[i];
+        grads_b[i] += i==y ? a[i] - 1 : a[i];
 }
 
 __device__
@@ -151,23 +150,19 @@ void update_parameters(float* parameters, float* grads, int len, int batch_size,
 
 __global__
 void softmax(float* logits, int N, float* probs){
-    // only one thread does the work
-    if(threadIdx.x == 0 && blockIdx.x == 0){
 
-        // numerical stability
+    if(threadIdx.x < 1){
         float max_val = logits[0];
-        for(int i=1; i<N; i++)
+        for(int i=0; i<N; i++)
             max_val = fmaxf(max_val, logits[i]);
 
-        // exponentiate + sum
-        float sum = 0.0f;
+        float total = 0.0f;
         for(int i=0; i<N; i++){
-            probs[i] = expf(logits[i] - max_val);
-            sum += probs[i];
+            probs[i] = expf(logits[i]-max_val);
+            total += probs[i];
         }
 
-        // normalize
         for(int i=0; i<N; i++)
-            probs[i] /= sum;
+            probs[i] /= total;
     }
 }
