@@ -39,17 +39,17 @@ def load_data(train=True):
 
 def SGD(model, data, epochs=3, batch_size=32, lr=0.005):
     """Orchestrates the backpropogation performed in CUDA.
-    Acts as a helper function.
+    Batching is not implemented yet.
     
     """
+    size = len(data)
+    mini_batches = []
+
+    for i in range(0, size, batch_size):
+        mini_batches.append(data[i:i+batch_size])
+
     for epoch in range(epochs):
         print(f"Epoch {epoch} started...")
-
-        size = len(data)
-        mini_batches = []
-
-        for i in range(0, size, batch_size):
-            mini_batches.append(data[i:i+batch_size])
         
         for mini_batch in mini_batches:
             model.update_miniBatch(mini_batch, lr)
@@ -80,7 +80,7 @@ def validate_model(model, test_data):
     print(f"Total Average Loss = {total_loss/len(test_data)}")
     for i in range(10):
         pred = correct_preds.get(i, 0)
-        c = count[i]
+        c = count.get(i, 0)
         print(f"Label:{i}\t Correct/Total predictions: {pred}/{c}\t Accuracy:{(pred*100.0/c):.2f}%")
 
 
@@ -100,12 +100,7 @@ def main():
     data = load_data()
     test_data = load_data(train=False)
 
-    print("="*50)
-    print("INITIAL MODEL VALIDATION")
-    validate_model(net, test_data)
-    print("="*50)
-
-    SGD(net, data)
+    SGD(net, data, 3, 1, 0.005)
 
     print("="*50)
     validate_model(net, test_data)
